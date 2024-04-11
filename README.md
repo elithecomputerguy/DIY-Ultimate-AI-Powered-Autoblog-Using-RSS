@@ -3,9 +3,9 @@ DIY: Ultimate AI Powered Autoblog Using RSS (Python, Ollama, Beautiful Soup, Fee
 
 This project shows you how to use RSS Feeds to scrape websites, and then rewrite the posts on those websites using Ollama and an LLM.
 
-process-autobog.py runs a constant loop to check for new posts, rewrite them and store them to the database.
+process-autobog.py -- runs a constant loop to check for new posts, rewrite them and store them to the database.
 
-webpage-autoblog.py creates a web page by selecting all of the posts from the database and then printing them out in HTML.
+webpage-autoblog.py -- creates a web page by selecting all of the posts from the database and then printing them out in HTML.
 
 
 ## Warning
@@ -18,7 +18,7 @@ Running Ollama constantly can be hard on your computer.
 
 ## YouTube Video
 
-https://youtu.be/rRc7Md6ABcA
+https://youtu.be/u3U6NIZ-wGc
 
 
 ## Requirements
