@@ -9,6 +9,7 @@ from bs4 import BeautifulSoup
 import feedparser
 import datetime
 from time import sleep
+import concurrent.futures
 
 #Class For Interacting with Database
 #path() is used for using database in same folder as script
@@ -109,7 +110,7 @@ def write_title(post_title):
 
 #LLM Function - Write the post
 def write_post(post_text):
-    query = f'Write a 500 word blog post based on this information\
+    query = f'Write a new blog post of a minimum 500 words based on this information \
             -- do not add a title \
             -- do not say anything such as "this article" \
             -- {post_text}'
@@ -123,39 +124,44 @@ def write_post(post_text):
 
     return response
 
+def process_feed(feed):
+    print(f'FEED -->> {feed}')
+    feed_output = feedparser.parse(feed)
+
+    for item in feed_output.entries:
+        link = item['link']
+        if database.db_check_record(link) == None:
+
+            response = parse(link)
+            title = response[0]
+            post_original = response[1]
+            title = write_title(title)
+
+            #Clean up the Title returned from LLM.  This works for llama2
+            title = title.split(':')
+            title = title[1]
+            title = title.replace('"','')
+            print(f'TITLE --- {title}')
+
+            #Wrap Post Paragagraphs in <p> tags
+            post=''
+            post_raw = write_post(post_original)
+            post_list = post_raw.split('\n')
+            for item in post_list:
+                post = f'{post} <p>{item}</p>'
+            print(f'POST ---- {post}')
+            database.db_insert(link,post_original,title, post)
+        else:
+            print('record already exists')
+
 def collect_process():
-    feed_list =['https://gizmodo.com/rss', \
-                'https://feeds.arstechnica.com/arstechnica/index']
+    # Open the file in read mode and read lines
+    with open('feeds.txt', 'r') as f:
+        feed_list = [line.strip() for line in f]
 
-    for feed in feed_list:
-        print(f'FEED -->> {feed}')
-        feed_output = feedparser.parse(feed)
-
-        for item in feed_output.entries:
-            link = item['link']
-            if database.db_check_record(link) == None:
-
-                response = parse(link)
-                title = response[0]
-                post_original = response[1]
-                title = write_title(title)
-
-                #Clean up the Title returned from LLM.  This works for llama2
-                title = title.split(':')
-                title = title[1]
-                title = title.replace('"','')
-                print(f'TITLE --- {title}')
-
-                #Wrap Post Paragagraphs in <p> tags
-                post=''
-                post_raw = write_post(post_original)
-                post_list = post_raw.split('\n')
-                for item in post_list:
-                    post = f'{post} <p>{item}</p>'
-                print(f'POST ---- {post}')
-                database.db_insert(link,post_original,title, post)
-            else:
-                print('record already exists')
+    # Use ThreadPoolExecutor to process multiple feeds concurrently
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        executor.map(process_feed, feed_list)
 
 #Create database table if it does not exist
 database.db_create()
