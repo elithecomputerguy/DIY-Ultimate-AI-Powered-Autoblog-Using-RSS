@@ -33,5 +33,9 @@ pip3 install BeautifulSoup4
 
 pip3 install feedparser
 
+pip3 install aiofiles
+
+pip3 install aiohttp
+
 sqlite - install from https://www.sqlite.org/download.html
 
