@@ -4,11 +4,13 @@
 import sqlite3
 import os
 import ollama
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 import feedparser
 import datetime
-from time import sleep
+import asyncio
+import aiofiles
+from functools import partial
 
 #Class For Interacting with Database
 #path() is used for using database in same folder as script
@@ -75,11 +77,13 @@ class database:
         conn.close()
 
 #Scrape the Title and the Text of the post
-def parse(url):
-    response = requests.get(url)
-    response.raise_for_status()  # This will raise an exception if there's an error.
+async def parse(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            response.raise_for_status()  # This will raise an exception if there's an error.
+            text = await response.text()
 
-    soup = BeautifulSoup(response.text, 'html.parser')
+    soup = BeautifulSoup(text, 'html.parser')
 
     p_tags = soup.find_all('p')
     title = soup.find('title')
@@ -89,78 +93,95 @@ def parse(url):
     for p in p_tags:
         page_text = f'{page_text} {p.text}'
 
-    return page_title,page_text 
+    return page_title,page_text
 
 #LLM Function - Write the title
-def write_title(post_title):
+async def write_title(post_title):
     query = f'''rewrite this title for a blog post\
             -- give only one response \
             -- do not say anything such as  -- Heres a possible rewrite of the title for a blog post:\
             -- {post_title}'''
-    response = ollama.chat(model='llama2:13b', messages=[
+    loop = asyncio.get_event_loop()
+    chat_func = partial(ollama.chat, model='llama2:13b', messages=[
     {
         'role': 'user',
         'content': query,
     },
     ])
-    response = response['message']['content']
-
-    return response
+    response = await loop.run_in_executor(None, chat_func)
+    return response['message']['content']
 
 #LLM Function - Write the post
-def write_post(post_text):
-    query = f'Write a 500 word blog post based on this information\
+async def write_post(post_text):
+    query = f'Write a new blog post of a minimum 500 words based on this information \
             -- do not add a title \
             -- do not say anything such as "this article" \
             -- {post_text}'
-    response = ollama.chat(model='llama2:13b', messages=[
+    loop = asyncio.get_event_loop()
+    chat_func = partial(ollama.chat, model='llama2:13b', messages=[
     {
         'role': 'user',
         'content': query,
     },
     ])
-    response = response['message']['content']
+    response = await loop.run_in_executor(None, chat_func)
+    return response['message']['content']
 
-    return response
+async def process_feed(feed, lock):
+    print(f'FEED -->> {feed}')
 
-def collect_process():
-    feed_list =['https://gizmodo.com/rss', \
-                'https://feeds.arstechnica.com/arstechnica/index']
+    loop = asyncio.get_event_loop()
+    feed_output = await loop.run_in_executor(None, feedparser.parse,feed)
 
-    for feed in feed_list:
-        print(f'FEED -->> {feed}')
-        feed_output = feedparser.parse(feed)
+    for item in feed_output.entries:
+        link = item['link']
+        if database.db_check_record(link) == None:
+            async with lock:
+                try:
+                    response = await parse(link)
+                    title = response[0]
+                    post_original = response[1]
+                    title = await write_title(title)
 
-        for item in feed_output.entries:
-            link = item['link']
-            if database.db_check_record(link) == None:
+                    # Clean up the Title returned from LLM.  This works for llama2
+                    title = title.split(':')
+                    title = title[1]
+                    title = title.replace('"','')
+                    print(f'TITLE --- {title}')
 
-                response = parse(link)
-                title = response[0]
-                post_original = response[1]
-                title = write_title(title)
-
-                #Clean up the Title returned from LLM.  This works for llama2
-                title = title.split(':')
-                title = title[1]
-                title = title.replace('"','')
-                print(f'TITLE --- {title}')
-
-                #Wrap Post Paragagraphs in <p> tags
-                post=''
-                post_raw = write_post(post_original)
-                post_list = post_raw.split('\n')
-                for item in post_list:
-                    post = f'{post} <p>{item}</p>'
-                print(f'POST ---- {post}')
-                database.db_insert(link,post_original,title, post)
-            else:
-                print('record already exists')
+                    # Wrap Post Paragagraphs in <p> tags
+                    post=''
+                    post_raw = await write_post(post_original)
+                    post_list = post_raw.split('\n')
+                    for item in post_list:
+                        post = f'{post} <p>{item}</p>'
+                    print(f'POST ---- {post}')
+                    return database.db_insert(link,post_original,title, post)
+                except Exception as e:
+                    print(f'Error processing feed {feed}: {e}') 
+        else:
+            print('This blog has already been processed.')
+            
+async def collect_process():
+    # Open the file in read mode and read lines
+    async with aiofiles.open('feeds.txt', 'r') as feedurl:
+        feed_list = [line.strip() for line in await feedurl.readlines()]
+    lock = asyncio.Lock()
+    tasks = [process_feed(feed, lock) for feed in feed_list]
+    await asyncio.gather(*tasks)
 
 #Create database table if it does not exist
 database.db_create()
 
-while True:
-    os.system('clear')
-    collect_process()
-    sleep(5)
+async def Main():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    while True:
+        try:
+            await collect_process()
+            await asyncio.sleep(1)
+        finally:
+            loop.close()
+
+# Run the main function
+asyncio.run(Main())
